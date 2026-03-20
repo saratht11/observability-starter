@@ -1,0 +1,42 @@
+spring:
+  application:
+    name: observability-starter
+
+# ── Actuator ──────────────────────────────────────────────────────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus, metrics
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    distribution:
+      percentiles-histogram:
+        "[http.server.requests]": true
+  tracing:
+    sampling:
+      probability: 1.0
+
+# ── Observability starter defaults ────────────────────────────────────────────
+observability:
+  metrics:
+    # Publish p50/p90/p99 percentiles by default for all @Monitored timers.
+    # Individual annotations can override via percentiles=true/false.
+    percentiles: false
+
+  baggage:
+    # Baggage fields to record as metric tags when recordBaggage=true on @Monitored.
+    # IMPORTANT: Only include fields that are guaranteed to be LOW-CARDINALITY.
+    # High-cardinality baggage values (IDs, UUIDs) will explode Prometheus cardinality.
+    fields:
+      - tenant
+      - region
+      - channel
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging:
+  level:
+    com.example.observability: INFO
+    io.micrometer: WARN
