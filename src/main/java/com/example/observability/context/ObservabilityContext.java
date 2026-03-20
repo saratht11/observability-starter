@@ -35,6 +35,17 @@ import org.springframework.stereotype.Service;
  * observabilityContext.recordEvent("DLQ_ROUTING",
  *     "Record " + record.key() + " sent to DLQ after max retries");
  * }</pre>
+ *
+ * <h2>State transition example</h2>
+ * <pre>{@code
+ * observabilityContext.recordStateTransition("payment", "PENDING", "PROCESSED");
+ * }</pre>
+ *
+ * <h2>Correlation ID example</h2>
+ * <pre>{@code
+ * String traceId = observabilityContext.getCorrelationId();
+ * observabilityContext.enrichWithCorrelationId(outboundHttpHeaders);
+ * }</pre>
  */
 @Service
 public class ObservabilityContext {
@@ -136,5 +147,74 @@ public class ObservabilityContext {
         }
 
         return tags;
+    }
+
+    // ── State transition helpers ──────────────────────────────────────────────
+
+    /**
+     * Records a domain state transition by:
+     * <ol>
+     *   <li>Logging a structured {@code INFO} message for log aggregation pipelines.</li>
+     *   <li>Attaching a span event to the currently active OTel span so the transition
+     *       is visible within the distributed trace.</li>
+     * </ol>
+     *
+     * <p>To also emit a Micrometer counter, publish a
+     * {@link com.example.observability.events.StateChangeEvent} via
+     * {@link org.springframework.context.ApplicationEventPublisher}.
+     *
+     * @param entityType low-cardinality entity type (e.g. {@code "payment"})
+     * @param fromState  previous state (e.g. {@code "PENDING"})
+     * @param toState    new state (e.g. {@code "PROCESSED"})
+     */
+    public void recordStateTransition(String entityType, String fromState, String toState) {
+        log.info("[ObservabilityContext] State transition: {} {} -> {}", entityType, fromState, toState);
+
+        Span current = tracer.currentSpan();
+        if (current != null) {
+            current.event("STATE_TRANSITION: " + entityType + " [" + fromState + " -> " + toState + "]");
+            current.tag("state.entity_type", entityType != null ? entityType : "unknown");
+            current.tag("state.from", fromState != null ? fromState : "unknown");
+            current.tag("state.to", toState != null ? toState : "unknown");
+        }
+    }
+
+    // ── Cross-service correlation helpers ─────────────────────────────────────
+
+    /**
+     * Returns the trace ID of the currently active OTel span, or {@code null} if there
+     * is no active span.  Use this as a cross-service correlation ID in outbound requests
+     * or log messages.
+     *
+     * @return the current trace ID string, or {@code null}
+     */
+    public String getCorrelationId() {
+        Span current = tracer.currentSpan();
+        if (current == null || current.context() == null) {
+            return null;
+        }
+        return current.context().traceId();
+    }
+
+    /**
+     * Enriches a mutable headers map with OTel trace and span IDs for cross-service
+     * correlation.  Call this before dispatching outbound HTTP or messaging requests.
+     *
+     * <p>Adds:
+     * <ul>
+     *   <li>{@code X-Trace-Id} — current OTel trace ID</li>
+     *   <li>{@code X-Span-Id}  — current OTel span ID</li>
+     * </ul>
+     *
+     * @param headers mutable map to enrich (e.g. HTTP request headers)
+     */
+    public void enrichWithCorrelationId(java.util.Map<String, String> headers) {
+        Span current = tracer.currentSpan();
+        if (current == null || current.context() == null) {
+            log.debug("[ObservabilityContext] enrichWithCorrelationId skipped — no active span");
+            return;
+        }
+        headers.put("X-Trace-Id", current.context().traceId());
+        headers.put("X-Span-Id", current.context().spanId());
     }
 }

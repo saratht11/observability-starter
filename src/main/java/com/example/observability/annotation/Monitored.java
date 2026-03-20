@@ -112,4 +112,26 @@ public @interface Monitored {
      * Only relevant when {@link #createSpan} is {@code true}.
      */
     String spanName() default "";
+
+    /**
+     * SpEL expression that resolves to a unique identifier for deduplication.
+     * When set, duplicate invocations sharing the same resolved ID within the TTL
+     * window are counted only once (retries do not inflate counters or timers).
+     *
+     * <p>Example: {@code uniqueId = "#payment.getId()"}
+     * <p>The resolved value is combined with the metric name to form the cache key.
+     */
+    String uniqueId() default "";
+
+    /**
+     * Timeout in milliseconds for the annotated method.
+     * When {@code > 0}, the calling thread is interrupted if the method does not
+     * complete within this duration, and a
+     * {@link com.example.observability.exception.MonitoredTimeoutException}
+     * is propagated to the caller.
+     *
+     * <p>Use in conjunction with {@link #trackActive} and Prometheus alerting rules
+     * for end-to-end stuck-operation detection.
+     */
+    long timeoutMs() default 0;
 }

@@ -2,6 +2,7 @@ package com.example.observability;
 
 import com.example.observability.annotation.MonitoredCounter;
 import com.example.observability.aspect.MonitoredCounterAspect;
+import com.example.observability.dedup.DeduplicationCache;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,7 +23,7 @@ class MonitoredCounterAspectTest {
     @BeforeEach
     void setUp() {
         registry = new SimpleMeterRegistry();
-        MonitoredCounterAspect aspect = new MonitoredCounterAspect(registry);
+        MonitoredCounterAspect aspect = new MonitoredCounterAspect(registry, new DeduplicationCache());
 
         AspectJProxyFactory factory = new AspectJProxyFactory(new SampleCounterBean());
         factory.addAspect(aspect);

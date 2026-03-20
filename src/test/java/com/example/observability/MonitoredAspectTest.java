@@ -3,6 +3,7 @@ package com.example.observability;
 import com.example.observability.annotation.Monitored;
 import com.example.observability.aspect.MonitoredAspect;
 import com.example.observability.baggage.BaggageReader;
+import com.example.observability.dedup.DeduplicationCache;
 import com.example.observability.metrics.LatencyRecorder;
 import com.example.observability.metrics.MonitoredTagResolver;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -48,7 +49,8 @@ class MonitoredAspectTest {
 
         MonitoredTagResolver tagResolver = new MonitoredTagResolver();
         LatencyRecorder recorder = new LatencyRecorder(registry);
-        aspect = new MonitoredAspect(tagResolver, recorder, baggageReader, tracer);
+        DeduplicationCache deduplicationCache = new DeduplicationCache();
+        aspect = new MonitoredAspect(tagResolver, recorder, baggageReader, tracer, deduplicationCache);
 
         AspectJProxyFactory factory = new AspectJProxyFactory(new SampleBean());
         factory.addAspect(aspect);

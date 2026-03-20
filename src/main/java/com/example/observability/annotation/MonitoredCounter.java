@@ -46,4 +46,13 @@ public @interface MonitoredCounter {
      * <p>Example: {@code tags = {"outcome=hit", "region=eu"}}
      */
     String[] tags() default {};
+
+    /**
+     * SpEL expression that resolves to a unique identifier for deduplication.
+     * When set, duplicate invocations sharing the same resolved ID within the TTL window
+     * are counted only once — useful for preventing retry storms from inflating counters.
+     *
+     * <p>Example: {@code uniqueId = "#transactionId"}
+     */
+    String uniqueId() default "";
 }

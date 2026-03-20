@@ -106,4 +106,70 @@ class ObservabilityContextTest {
         ctx.recordEvent("SOME_EVENT");
         verify(span, never()).event(anyString());
     }
+
+    // ── State transition tests ────────────────────────────────────────────────
+
+    @Test
+    void recordStateTransition_withActiveSpan_attachesSpanEventAndTags() {
+        when(tracer.currentSpan()).thenReturn(span);
+
+        ctx.recordStateTransition("payment", "PENDING", "PROCESSED");
+
+        verify(span).event("STATE_TRANSITION: payment [PENDING -> PROCESSED]");
+        verify(span).tag("state.entity_type", "payment");
+        verify(span).tag("state.from", "PENDING");
+        verify(span).tag("state.to", "PROCESSED");
+    }
+
+    @Test
+    void recordStateTransition_noActiveSpan_doesNotThrow() {
+        when(tracer.currentSpan()).thenReturn(null);
+
+        // Should not throw
+        ctx.recordStateTransition("payment", "PENDING", "PROCESSED");
+        verify(span, never()).event(anyString());
+    }
+
+    // ── Correlation ID tests ──────────────────────────────────────────────────
+
+    @Test
+    void getCorrelationId_withActiveSpan_returnsTraceId() {
+        io.micrometer.tracing.TraceContext context = mock(io.micrometer.tracing.TraceContext.class);
+        when(tracer.currentSpan()).thenReturn(span);
+        when(span.context()).thenReturn(context);
+        when(context.traceId()).thenReturn("abc123");
+
+        assertThat(ctx.getCorrelationId()).isEqualTo("abc123");
+    }
+
+    @Test
+    void getCorrelationId_noActiveSpan_returnsNull() {
+        when(tracer.currentSpan()).thenReturn(null);
+        assertThat(ctx.getCorrelationId()).isNull();
+    }
+
+    @Test
+    void enrichWithCorrelationId_withActiveSpan_populatesHeaders() {
+        io.micrometer.tracing.TraceContext context = mock(io.micrometer.tracing.TraceContext.class);
+        when(tracer.currentSpan()).thenReturn(span);
+        when(span.context()).thenReturn(context);
+        when(context.traceId()).thenReturn("trace-xyz");
+        when(context.spanId()).thenReturn("span-abc");
+
+        java.util.Map<String, String> headers = new java.util.HashMap<>();
+        ctx.enrichWithCorrelationId(headers);
+
+        assertThat(headers).containsEntry("X-Trace-Id", "trace-xyz");
+        assertThat(headers).containsEntry("X-Span-Id", "span-abc");
+    }
+
+    @Test
+    void enrichWithCorrelationId_noActiveSpan_headersUnchanged() {
+        when(tracer.currentSpan()).thenReturn(null);
+
+        java.util.Map<String, String> headers = new java.util.HashMap<>();
+        ctx.enrichWithCorrelationId(headers);
+
+        assertThat(headers).isEmpty();
+    }
 }
