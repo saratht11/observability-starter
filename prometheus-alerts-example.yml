@@ -1,0 +1,182 @@
+# prometheus-alerts-example.yml
+#
+# Example Prometheus alerting rules for the observability-starter.
+#
+# These rules demonstrate how to alert on the metrics emitted by @Monitored,
+# @PaymentMonitored, LongTaskTimers (stuck detection), state transitions, and
+# error rates.
+#
+# Usage:
+#   1. Place this file (or its contents) in your Prometheus rules directory.
+#   2. Reference it from your prometheus.yml:
+#        rule_files:
+#          - "prometheus-alerts-example.yml"
+#   3. Reload Prometheus: curl -X POST http://localhost:9090/-/reload
+#
+# Labels used throughout:
+#   component   - the logical subsystem (from @Monitored / @PaymentMonitored)
+#   entity_type - domain object type (from StateChangeEvent)
+#   from_state  - previous state
+#   to_state    - new state
+# ─────────────────────────────────────────────────────────────────────────────
+
+groups:
+
+  # ── Stuck-operation detection (LongTaskTimer) ─────────────────────────────
+  - name: stuck_operations
+    rules:
+
+      - alert: StuckOperationDetected
+        expr: |
+          sum by (component) (
+            payment_processing_latency_active_seconds_sum
+          ) > 60
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Long-running operation stuck in {{ $labels.component }}"
+          description: >
+            The LongTaskTimer for component '{{ $labels.component }}' has had an active
+            invocation running for more than 60 seconds for at least 2 minutes.
+            This may indicate a stuck or deadlocked operation.
+            Current active duration: {{ $value | humanizeDuration }}.
+
+      - alert: StuckOperationCritical
+        expr: |
+          sum by (component) (
+            payment_processing_latency_active_seconds_sum
+          ) > 300
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CRITICAL: Stuck operation in {{ $labels.component }} for > 5 minutes"
+          description: >
+            Component '{{ $labels.component }}' has an operation that has been active for
+            more than 5 minutes. Immediate investigation is required.
+
+      # Generic rule for any @Monitored metric with trackActive=true
+      # Matches metric names ending in "_latency_active_seconds_sum"
+      - alert: GenericStuckOperation
+        expr: |
+          sum by (component, __name__) (
+            {__name__=~".*_latency_active_seconds_sum"}
+          ) > 120
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Stuck operation detected for metric {{ $labels.__name__ }}"
+          description: >
+            Metric '{{ $labels.__name__ }}' (component: '{{ $labels.component }}') has
+            had an active invocation running for more than 2 minutes.
+
+  # ── SLO breach alerts ──────────────────────────────────────────────────────
+  - name: slo_breaches
+    rules:
+
+      - alert: PaymentProcessingSLOBreach
+        expr: |
+          histogram_quantile(0.99,
+            rate(payment_processing_latency_seconds_bucket[5m])
+          ) > 0.8
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Payment processing p99 latency breaching SLO (800ms)"
+          description: >
+            The 99th percentile latency for payment.processing is {{ $value | humanizeDuration }},
+            which exceeds the 800ms SLO threshold.
+
+      - alert: HighPaymentErrorRate
+        expr: |
+          rate(payment_processing_error_total[5m]) /
+          rate(payment_processing_latency_seconds_count[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Payment processing error rate above 5%"
+          description: >
+            The payment processing error rate is {{ $value | humanizePercentage }},
+            which exceeds the 5% threshold.
+
+  # ── State transition anomaly detection ────────────────────────────────────
+  - name: state_transitions
+    rules:
+
+      - alert: HighPaymentFailureTransitions
+        expr: |
+          rate(state_transitions_total{entity_type="payment",to_state="FAILED"}[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate of payment transitions to FAILED state"
+          description: >
+            Payments are transitioning to FAILED at a rate of {{ $value | humanize }} per second
+            (entity_type={{ $labels.entity_type }}, component={{ $labels.component }}).
+
+      - alert: PaymentStuckInPendingState
+        expr: |
+          # If we see many transitions INTO pending but not out of it, payments may be stuck.
+          rate(state_transitions_total{entity_type="payment",to_state="PENDING"}[10m])
+          - rate(state_transitions_total{entity_type="payment",from_state="PENDING"}[10m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Payments accumulating in PENDING state"
+          description: >
+            More payments are entering PENDING state than leaving it, suggesting
+            downstream processing may be impaired.
+
+  # ── Counter-based business alerts ─────────────────────────────────────────
+  - name: business_counters
+    rules:
+
+      - alert: KafkaDLQRoutingSpike
+        expr: |
+          rate(kafka_records_processed_total{outcome="dlq"}[5m]) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High DLQ routing rate for {{ $labels.component }}"
+          description: >
+            Records are being routed to the DLQ at {{ $value | humanize }} records/second
+            for component '{{ $labels.component }}'. Investigate processing errors.
+
+      - alert: CacheHitRateLow
+        expr: |
+          rate(cache_access_total{outcome="hit"}[5m]) /
+          (rate(cache_access_total{outcome="hit"}[5m]) + rate(cache_access_total{outcome="miss"}[5m]))
+          < 0.7
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Cache hit rate below 70% for {{ $labels.component }}"
+          description: >
+            The cache hit rate for '{{ $labels.component }}' has dropped to
+            {{ $value | humanizePercentage }}. Consider reviewing cache TTLs or pre-warming.
+
+  # ── Deduplication health ───────────────────────────────────────────────────
+  # (If you expose DeduplicationCache size as a gauge, use this rule)
+  - name: deduplication
+    rules:
+
+      - alert: DeduplicationCacheNearCapacity
+        expr: |
+          deduplication_cache_size > 8000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DeduplicationCache approaching maximum capacity"
+          description: >
+            The in-memory deduplication cache contains {{ $value }} entries, which is
+            approaching the configured maximum of 10,000. High retry rates or slow TTL
+            expiry may cause entries to be dropped, allowing duplicate counts.

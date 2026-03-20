@@ -1,6 +1,7 @@
 package com.example.observability.aspect;
 
 import com.example.observability.annotation.MonitoredCounter;
+import com.example.observability.dedup.DeduplicationCache;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
@@ -10,6 +11,12 @@ import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.expression.MethodBasedEvaluationContext;
+import org.springframework.core.DefaultParameterNameDiscoverer;
+import org.springframework.core.ParameterNameDiscoverer;
+import org.springframework.expression.ExpressionParser;
+import org.springframework.expression.spel.standard.SpelExpressionParser;
+import org.springframework.expression.spel.support.StandardEvaluationContext;
 import org.springframework.stereotype.Component;
 
 import java.lang.reflect.Method;
@@ -36,17 +43,36 @@ public class MonitoredCounterAspect {
     private static final Logger log = LoggerFactory.getLogger(MonitoredCounterAspect.class);
 
     private final MeterRegistry registry;
+    private final DeduplicationCache deduplicationCache;
 
-    public MonitoredCounterAspect(MeterRegistry registry) {
+    private final ExpressionParser spelParser = new SpelExpressionParser();
+    private final ParameterNameDiscoverer nameDiscoverer = new DefaultParameterNameDiscoverer();
+
+    public MonitoredCounterAspect(MeterRegistry registry, DeduplicationCache deduplicationCache) {
         this.registry = registry;
+        this.deduplicationCache = deduplicationCache;
     }
 
     @After("@annotation(monitoredCounter)")
     public void increment(JoinPoint jp, MonitoredCounter monitoredCounter) {
         MethodSignature signature = (MethodSignature) jp.getSignature();
         Method method = signature.getMethod();
+        Object[] args = jp.getArgs();
 
         String metricName = resolveMetricName(monitoredCounter, method);
+
+        // Deduplication: skip count when the same uniqueId is seen within TTL
+        if (!monitoredCounter.uniqueId().isBlank()) {
+            String resolvedId = evaluateSpel(monitoredCounter.uniqueId(), method, args);
+            if (resolvedId != null && !resolvedId.isBlank()) {
+                String cacheKey = metricName + ":" + resolvedId;
+                if (!deduplicationCache.tryRegister(cacheKey)) {
+                    log.debug("[MonitoredCounterAspect] Duplicate invocation for key '{}', skipping count", cacheKey);
+                    return;
+                }
+            }
+        }
+
         Tags tags = buildTags(monitoredCounter);
 
         Counter.builder(metricName)
@@ -85,5 +111,17 @@ public class MonitoredCounterAspect {
         }
 
         return Tags.of(tagList);
+    }
+
+    private String evaluateSpel(String expression, Method method, Object[] args) {
+        try {
+            StandardEvaluationContext ctx = new MethodBasedEvaluationContext(
+                    null, method, args, nameDiscoverer);
+            Object value = spelParser.parseExpression(expression).getValue(ctx);
+            return value != null ? value.toString() : null;
+        } catch (Exception e) {
+            log.debug("[MonitoredCounterAspect] SpEL evaluation failed for '{}': {}", expression, e.getMessage());
+            return null;
+        }
     }
 }
