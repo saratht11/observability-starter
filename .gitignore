@@ -1,0 +1,26 @@
+### Maven build output
+target/
+
+### IDE files
+.idea/
+*.iml
+*.ipr
+*.iws
+.classpath
+.project
+.settings/
+
+### Eclipse
+*.class
+
+### OS files
+.DS_Store
+Thumbs.db
+
+### Logs
+*.log
+logs/
+
+### Spring Boot dev tools
+.mvn/wrapper/
+spring-boot-devtools.properties
