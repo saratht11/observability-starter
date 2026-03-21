@@ -112,4 +112,11 @@ public @interface Monitored {
      * Only relevant when {@link #createSpan} is {@code true}.
      */
     String spanName() default "";
+
+    /**
+     * Whether to enrich the span with resolved {@link #spanTags} values.
+     * Set to {@code false} to skip span tag enrichment entirely.
+     * Only relevant when {@link #createSpan} is {@code true}.
+     */
+    boolean addSpanTags() default true;
 }

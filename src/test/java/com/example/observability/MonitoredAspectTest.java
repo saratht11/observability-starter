@@ -18,7 +18,10 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -29,6 +32,8 @@ class MonitoredAspectTest {
     private MeterRegistry registry;
     private MonitoredAspect aspect;
     private SampleBean proxy;
+    private Tracer tracer;
+    private Span span;
 
     @BeforeEach
     void setUp() {
@@ -38,8 +43,8 @@ class MonitoredAspectTest {
         when(baggageReader.read(anyString())).thenReturn(null);
         when(baggageReader.readAll()).thenReturn(Map.of());
 
-        Tracer tracer = mock(Tracer.class);
-        Span span = mock(Span.class);
+        tracer = mock(Tracer.class);
+        span = mock(Span.class);
         when(tracer.nextSpan()).thenReturn(span);
         when(span.name(anyString())).thenReturn(span);
         when(span.start()).thenReturn(span);
@@ -101,6 +106,43 @@ class MonitoredAspectTest {
         assertThat(registry.find("payment.errorsonly.error.total").counter()).isNull();
     }
 
+    @Test
+    void createSpan_noParentTrace_doesNotCreateSpan() {
+        // tracer.currentSpan() returns null by default — span must not be created
+        when(tracer.currentSpan()).thenReturn(null);
+        proxy.doWorkWithSpan();
+        verify(tracer, never()).nextSpan();
+    }
+
+    @Test
+    void createSpan_withParentTrace_createsAndClosesSpanInScope() {
+        Span parentSpan = mock(Span.class);
+        Tracer.SpanInScope scope = mock(Tracer.SpanInScope.class);
+        when(tracer.currentSpan()).thenReturn(parentSpan);
+        when(tracer.withSpan(span)).thenReturn(scope);
+
+        proxy.doWorkWithSpan();
+
+        verify(tracer).nextSpan();
+        verify(tracer).withSpan(span);
+        verify(scope).close();
+        verify(span).end();
+    }
+
+    @Test
+    void createSpan_withAddSpanTagsFalse_skipsEnrichment() {
+        Span parentSpan = mock(Span.class);
+        Tracer.SpanInScope scope = mock(Tracer.SpanInScope.class);
+        when(tracer.currentSpan()).thenReturn(parentSpan);
+        when(tracer.withSpan(span)).thenReturn(scope);
+
+        proxy.doWorkWithSpanNoTags();
+
+        // outcome tag is still set, but no custom span tags from annotation
+        verify(span, never()).tag(eq("custom.tag"), anyString());
+        verify(span).tag("outcome", "success");
+    }
+
     // ── Sample bean ──────────────────────────────────────────────────────────
 
     static class SampleBean {
@@ -129,6 +171,26 @@ class MonitoredAspectTest {
         )
         public void doWorkErrorsOnly() {
             // success — no latency recorded when recordOnlyErrors=true
+        }
+
+        @Monitored(
+                metric = "payment.spanwork",
+                component = "payments",
+                createSpan = true,
+                spanName = "payment-span"
+        )
+        public void doWorkWithSpan() {
+            // exercises createSpan path
+        }
+
+        @Monitored(
+                metric = "payment.spanwork.notags",
+                component = "payments",
+                createSpan = true,
+                addSpanTags = false
+        )
+        public void doWorkWithSpanNoTags() {
+            // exercises addSpanTags=false path
         }
     }
 }

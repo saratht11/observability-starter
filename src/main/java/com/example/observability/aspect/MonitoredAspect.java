@@ -99,12 +99,16 @@ public class MonitoredAspect {
             activeSample = ltt.start();
         }
 
-        // Optionally start a child span
+        // Optionally start a child span (only when an active parent trace exists)
         Span span = null;
-        if (monitored.createSpan()) {
+        Tracer.SpanInScope spanInScope = null;
+        if (monitored.createSpan() && tracer.currentSpan() != null) {
             String spanName = monitored.spanName().isBlank() ? metricName : monitored.spanName();
             span = tracer.nextSpan().name(spanName).start();
-            enrichSpan(span, monitored, method, args);
+            spanInScope = tracer.withSpan(span);  // activates span on this thread
+            if (monitored.addSpanTags()) {
+                enrichSpan(span, monitored, method, args);
+            }
         }
 
         long startNanos = System.nanoTime();
@@ -142,8 +146,11 @@ public class MonitoredAspect {
             if (activeSample != null) {
                 activeSample.stop();
             }
+            if (spanInScope != null) {
+                spanInScope.close();  // close scope first
+            }
             if (span != null) {
-                span.end();
+                span.end();           // then end span
             }
         }
     }
