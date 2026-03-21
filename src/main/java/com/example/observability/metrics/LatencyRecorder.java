@@ -47,7 +47,8 @@ public class LatencyRecorder {
                 .tags(Tags.of(tags));
 
         if (percentiles) {
-            builder.publishPercentiles(0.50, 0.90, 0.99);
+            builder.publishPercentileHistogram(true);   // le buckets for histogram_quantile()
+            builder.publishPercentiles(0.50, 0.90, 0.99); // client-side for /actuator/metrics
         }
 
         if (sloMs > 0) {
