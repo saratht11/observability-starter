@@ -101,6 +101,58 @@ class MonitoredAspectTest {
         assertThat(registry.find("payment.errorsonly.error.total").counter()).isNull();
     }
 
+    @Test
+    void successPath_hasOutcomeSuccessTag() {
+        proxy.doWork("web");
+        assertThat(registry.find("payment.processing.latency")
+                .tag("outcome", "success")
+                .timer()).isNotNull();
+    }
+
+    @Test
+    void successPath_hasSloBreach_false_whenNoSloConfigured() {
+        proxy.doWork("web");
+        assertThat(registry.find("payment.processing.latency")
+                .tag("slo_breach", "false")
+                .timer()).isNotNull();
+    }
+
+    @Test
+    void errorPath_hasOutcomeErrorTag() {
+        assertThatThrownBy(() -> proxy.doFail())
+                .isInstanceOf(RuntimeException.class);
+        assertThat(registry.find("payment.failure.latency")
+                .tag("outcome", "error")
+                .timer()).isNotNull();
+    }
+
+    @Test
+    void errorPath_errorCounter_hasOutcomeErrorTag() {
+        assertThatThrownBy(() -> proxy.doFail())
+                .isInstanceOf(RuntimeException.class);
+        assertThat(registry.find("payment.failure.error.total")
+                .tag("outcome", "error")
+                .counter()).isNotNull();
+    }
+
+    @Test
+    void sloBreachTag_isTrueWhenSloExceeded() throws InterruptedException {
+        proxySlo.doSlowWork(); // sleeps 20ms with sloMs=5 → guaranteed breach
+        assertThat(registry.find("payment.slo.latency")
+                .tag("outcome", "success")
+                .tag("slo_breach", "true")
+                .timer()).isNotNull();
+    }
+
+    @Test
+    void sloBreachTag_isFalseWhenWithinSlo() {
+        proxySlo.doFastWork(); // sloMs=0 → slo_breach always false
+        assertThat(registry.find("payment.slo.latency")
+                .tag("outcome", "success")
+                .tag("slo_breach", "false")
+                .timer()).isNotNull();
+    }
+
     // ── Sample bean ──────────────────────────────────────────────────────────
 
     static class SampleBean {
@@ -129,6 +181,38 @@ class MonitoredAspectTest {
         )
         public void doWorkErrorsOnly() {
             // success — no latency recorded when recordOnlyErrors=true
+        }
+    }
+
+    // ── SLO sample bean ───────────────────────────────────────────────────────
+
+    private SloBean proxySlo;
+
+    @BeforeEach
+    void setUpSlo() {
+        AspectJProxyFactory factory = new AspectJProxyFactory(new SloBean());
+        factory.addAspect(aspect);
+        proxySlo = factory.getProxy();
+    }
+
+    static class SloBean {
+
+        @Monitored(
+                metric = "payment.slo",
+                component = "payments",
+                sloMs = 5
+        )
+        public void doSlowWork() throws InterruptedException {
+            Thread.sleep(20); // 20ms > sloMs=5 → slo_breach=true
+        }
+
+        @Monitored(
+                metric = "payment.slo",
+                component = "payments"
+                // sloMs defaults to 0 → slo_breach always false
+        )
+        public void doFastWork() {
+            // completes instantly
         }
     }
 }
