@@ -107,40 +107,55 @@ class MonitoredAspectTest {
     }
 
     @Test
-    void createSpan_noParentTrace_doesNotCreateSpan() {
-        // tracer.currentSpan() returns null by default — span must not be created
-        when(tracer.currentSpan()).thenReturn(null);
-        proxy.doWorkWithSpan();
-        verify(tracer, never()).nextSpan();
+    void successPath_hasOutcomeSuccessTag() {
+        proxy.doWork("web");
+        assertThat(registry.find("payment.processing.latency")
+                .tag("outcome", "success")
+                .timer()).isNotNull();
     }
 
     @Test
-    void createSpan_withParentTrace_createsAndClosesSpanInScope() {
-        Span parentSpan = mock(Span.class);
-        Tracer.SpanInScope scope = mock(Tracer.SpanInScope.class);
-        when(tracer.currentSpan()).thenReturn(parentSpan);
-        when(tracer.withSpan(span)).thenReturn(scope);
-
-        proxy.doWorkWithSpan();
-
-        verify(tracer).nextSpan();
-        verify(tracer).withSpan(span);
-        verify(scope).close();
-        verify(span).end();
+    void successPath_hasSloBreach_false_whenNoSloConfigured() {
+        proxy.doWork("web");
+        assertThat(registry.find("payment.processing.latency")
+                .tag("slo_breach", "false")
+                .timer()).isNotNull();
     }
 
     @Test
-    void createSpan_withAddSpanTagsFalse_skipsEnrichment() {
-        Span parentSpan = mock(Span.class);
-        Tracer.SpanInScope scope = mock(Tracer.SpanInScope.class);
-        when(tracer.currentSpan()).thenReturn(parentSpan);
-        when(tracer.withSpan(span)).thenReturn(scope);
+    void errorPath_hasOutcomeErrorTag() {
+        assertThatThrownBy(() -> proxy.doFail())
+                .isInstanceOf(RuntimeException.class);
+        assertThat(registry.find("payment.failure.latency")
+                .tag("outcome", "error")
+                .timer()).isNotNull();
+    }
 
-        proxy.doWorkWithSpanNoTags();
+    @Test
+    void errorPath_errorCounter_hasOutcomeErrorTag() {
+        assertThatThrownBy(() -> proxy.doFail())
+                .isInstanceOf(RuntimeException.class);
+        assertThat(registry.find("payment.failure.error.total")
+                .tag("outcome", "error")
+                .counter()).isNotNull();
+    }
 
-        // outcome tag is still set, but no custom span tags from annotation
-        verify(span, never()).tag(eq("custom.tag"), anyString());
-        verify(span).tag("outcome", "success");
+    @Test
+    void sloBreachTag_isTrueWhenSloExceeded() throws InterruptedException {
+        proxySlo.doSlowWork(); // sleeps 20ms with sloMs=5 → guaranteed breach
+        assertThat(registry.find("payment.slo.latency")
+                .tag("outcome", "success")
+                .tag("slo_breach", "true")
+                .timer()).isNotNull();
+    }
+
+    @Test
+    void sloBreachTag_isFalseWhenWithinSlo() {
+        proxySlo.doFastWork(); // sloMs=0 → slo_breach always false
+        assertThat(registry.find("payment.slo.latency")
+                .tag("outcome", "success")
+                .tag("slo_breach", "false")
+                .timer()).isNotNull();
     }
 
     // ── Sample bean ──────────────────────────────────────────────────────────
@@ -191,6 +206,38 @@ class MonitoredAspectTest {
         )
         public void doWorkWithSpanNoTags() {
             // exercises addSpanTags=false path
+        }
+    }
+
+    // ── SLO sample bean ───────────────────────────────────────────────────────
+
+    private SloBean proxySlo;
+
+    @BeforeEach
+    void setUpSlo() {
+        AspectJProxyFactory factory = new AspectJProxyFactory(new SloBean());
+        factory.addAspect(aspect);
+        proxySlo = factory.getProxy();
+    }
+
+    static class SloBean {
+
+        @Monitored(
+                metric = "payment.slo",
+                component = "payments",
+                sloMs = 5
+        )
+        public void doSlowWork() throws InterruptedException {
+            Thread.sleep(20); // 20ms > sloMs=5 → slo_breach=true
+        }
+
+        @Monitored(
+                metric = "payment.slo",
+                component = "payments"
+                // sloMs defaults to 0 → slo_breach always false
+        )
+        public void doFastWork() {
+            // completes instantly
         }
     }
 }

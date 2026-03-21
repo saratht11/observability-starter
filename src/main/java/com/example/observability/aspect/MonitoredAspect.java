@@ -21,6 +21,7 @@ import org.springframework.stereotype.Component;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Spring AOP aspect that intercepts methods annotated with {@link Monitored} and
@@ -85,12 +86,8 @@ public class MonitoredAspect {
             }
         }
 
-        // Build timer (always, unless recordOnlyErrors)
         boolean recordOnlyErrors = monitored.recordOnlyErrors();
         boolean usePercentiles = monitored.percentiles() || globalPercentiles;
-        Timer timer = recordOnlyErrors
-                ? null
-                : latencyRecorder.buildTimer(metricName, metricTags, monitored.sloMs(), usePercentiles);
 
         // Build long task timer for active invocations tracking
         LongTaskTimer.Sample activeSample = null;
@@ -116,8 +113,17 @@ public class MonitoredAspect {
             Object result = pjp.proceed();
             long elapsedNanos = System.nanoTime() - startNanos;
 
-            if (timer != null) {
-                latencyRecorder.recordSuccess(timer, elapsedNanos, metricTags, monitored.sloMs());
+            if (!recordOnlyErrors) {
+                long elapsedMs = TimeUnit.NANOSECONDS.toMillis(elapsedNanos);
+                boolean sloBreach = monitored.sloMs() > 0 && elapsedMs > monitored.sloMs();
+
+                List<Tag> successTags = new ArrayList<>(metricTags);
+                successTags.add(Tag.of("outcome", "success"));
+                successTags.add(Tag.of("slo_breach", String.valueOf(sloBreach)));
+
+                Timer successTimer = latencyRecorder.buildTimer(
+                        metricName, successTags, monitored.sloMs(), usePercentiles);
+                successTimer.record(elapsedNanos, TimeUnit.NANOSECONDS);
             }
 
             if (span != null) {
@@ -128,12 +134,12 @@ public class MonitoredAspect {
         } catch (Throwable ex) {
             long elapsedNanos = System.nanoTime() - startNanos;
 
-            // Build error timer only when recordOnlyErrors=true (timer was null above)
-            Timer errorTimer = timer;
-            if (recordOnlyErrors) {
-                errorTimer = latencyRecorder.buildTimer(metricName, metricTags, monitored.sloMs(), usePercentiles);
-            }
-            latencyRecorder.recordError(metricName, metricTags, errorTimer, elapsedNanos);
+            List<Tag> errorTags = new ArrayList<>(metricTags);
+            errorTags.add(Tag.of("outcome", "error"));
+
+            Timer errorTimer = latencyRecorder.buildTimer(
+                    metricName, errorTags, monitored.sloMs(), usePercentiles);
+            latencyRecorder.recordError(metricName, errorTags, errorTimer, elapsedNanos);
 
             if (span != null) {
                 span.tag("outcome", "error");
