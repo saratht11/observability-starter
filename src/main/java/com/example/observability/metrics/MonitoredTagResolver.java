@@ -5,6 +5,7 @@ import io.micrometer.core.instrument.Tag;
 import org.springframework.context.expression.MethodBasedEvaluationContext;
 import org.springframework.core.DefaultParameterNameDiscoverer;
 import org.springframework.core.ParameterNameDiscoverer;
+import org.springframework.expression.Expression;
 import org.springframework.expression.ExpressionParser;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
 import org.springframework.expression.spel.support.StandardEvaluationContext;
@@ -13,6 +14,7 @@ import org.springframework.stereotype.Component;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Resolves metric and span tags for {@link Monitored}-annotated methods.
@@ -31,6 +33,7 @@ public class MonitoredTagResolver {
 
     private final ExpressionParser parser = new SpelExpressionParser();
     private final ParameterNameDiscoverer nameDiscoverer = new DefaultParameterNameDiscoverer();
+    private final ConcurrentHashMap<String, Expression> expressionCache = new ConcurrentHashMap<>();
 
     /**
      * Builds the list of Micrometer {@link Tag}s for metric recording.
@@ -101,18 +104,19 @@ public class MonitoredTagResolver {
         }
     }
 
-    private void evaluateTag(String expression, StandardEvaluationContext context, List<Tag> tags) {
-        int idx = expression.indexOf('=');
+    private void evaluateTag(String tagExpression, StandardEvaluationContext context, List<Tag> tags) {
+        int idx = tagExpression.indexOf('=');
         if (idx <= 0) {
             return;
         }
-        String key = expression.substring(0, idx).trim();
-        String spelExpr = expression.substring(idx + 1).trim();
+        String key = tagExpression.substring(0, idx).trim();
+        String spelExpr = tagExpression.substring(idx + 1).trim();
         if (key.isBlank() || spelExpr.isBlank()) {
             return;
         }
         try {
-            Object value = parser.parseExpression(spelExpr).getValue(context);
+            Expression expression = expressionCache.computeIfAbsent(spelExpr, parser::parseExpression);
+            Object value = expression.getValue(context);
             String tagValue = value != null ? value.toString() : "unknown";
             tags.add(Tag.of(key, tagValue.isBlank() ? "unknown" : tagValue));
         } catch (Exception e) {

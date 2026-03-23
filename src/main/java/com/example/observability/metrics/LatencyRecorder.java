@@ -10,7 +10,9 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
  * Encapsulates all Micrometer metric recording for {@code @Monitored}-annotated methods.
@@ -27,13 +29,16 @@ import java.util.concurrent.TimeUnit;
 public class LatencyRecorder {
 
     private final MeterRegistry registry;
+    private final ConcurrentHashMap<String, Timer> timerCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, LongTaskTimer> longTaskTimerCache = new ConcurrentHashMap<>();
 
     public LatencyRecorder(MeterRegistry registry) {
         this.registry = registry;
     }
 
     /**
-     * Builds a {@link Timer} for the given metric name and tags.
+     * Returns a cached {@link Timer} for the given metric name, tags, and configuration.
+     * The timer is created lazily on first use and reused on subsequent calls.
      *
      * @param metricName  base metric name
      * @param tags        resolved metric tags
@@ -42,6 +47,11 @@ public class LatencyRecorder {
      * @return the configured {@link Timer}
      */
     public Timer buildTimer(String metricName, List<Tag> tags, long sloMs, boolean percentiles) {
+        String cacheKey = buildTimerKey(metricName, tags, sloMs, percentiles);
+        return timerCache.computeIfAbsent(cacheKey, k -> createTimer(metricName, tags, sloMs, percentiles));
+    }
+
+    private Timer createTimer(String metricName, List<Tag> tags, long sloMs, boolean percentiles) {
         Timer.Builder builder = Timer.builder(metricName + ".latency")
                 .description("Latency of " + metricName)
                 .tags(Tags.of(tags));
@@ -58,18 +68,32 @@ public class LatencyRecorder {
         return builder.register(registry);
     }
 
+    private String buildTimerKey(String metricName, List<Tag> tags, long sloMs, boolean percentiles) {
+        return metricName + "|" + serializeTags(tags) + "|slo=" + sloMs + "|pct=" + percentiles;
+    }
+
+    private String serializeTags(List<Tag> tags) {
+        return tags.stream()
+                .map(t -> t.getKey() + "=" + t.getValue())
+                .sorted()
+                .collect(Collectors.joining(","));
+    }
+
     /**
-     * Builds a {@link LongTaskTimer} for tracking active (in-flight) invocations.
+     * Returns a cached {@link LongTaskTimer} for tracking active (in-flight) invocations.
+     * The timer is created lazily on first use and reused on subsequent calls.
      *
      * @param metricName base metric name
      * @param tags       resolved metric tags
      * @return the configured {@link LongTaskTimer}
      */
     public LongTaskTimer buildLongTaskTimer(String metricName, List<Tag> tags) {
-        return LongTaskTimer.builder(metricName + ".latency.active")
-                .description("Active (in-flight) invocations of " + metricName)
-                .tags(Tags.of(tags))
-                .register(registry);
+        String cacheKey = metricName + "|" + serializeTags(tags);
+        return longTaskTimerCache.computeIfAbsent(cacheKey, k ->
+                LongTaskTimer.builder(metricName + ".latency.active")
+                        .description("Active (in-flight) invocations of " + metricName)
+                        .tags(Tags.of(tags))
+                        .register(registry));
     }
 
     /**
