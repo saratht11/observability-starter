@@ -86,7 +86,7 @@ public PaymentResult processPayment(PaymentRequest req) {
 - Every method requires boilerplate wiring and `MeterRegistry` injection.
 - Names and tags diverge across the codebase without strict conventions.
 - No automatic error counter — you add it yourself or forget.
-- No span integration, no SLO flag, no sampling.
+- No span integration, no SLO flag.
 - Teams inevitably produce inconsistent metric names and tag keys.
 
 ### When to use
@@ -161,7 +161,6 @@ public TimedAspect timedAspect(MeterRegistry registry) {
 - **Static tags only** — no SpEL-evaluated dynamic tags.
 - No automatic error counter.
 - No SLO threshold / `slo_breach` tag.
-- No sampling control.
 - No tracing span integration.
 - No in-flight (active) invocation tracking.
 - No baggage propagation support.
@@ -196,7 +195,6 @@ public PaymentResult processPayment(PaymentRequest req) {
 - Verbose — every method needs `Observation.createNotStarted(...)` boilerplate.
 - No automatic error counter (you must handle exceptions manually).
 - No `slo_breach` flag or SLO bucket configuration.
-- No sampling control.
 - No baggage-to-tag propagation.
 - Convention enforcement still depends on developer discipline.
 
@@ -247,7 +245,7 @@ public PaymentResult processPayment(String channel, String partnerTier,
 
 | Metric | Type | When |
 |--------|------|------|
-| `payment.processing.latency` | `Timer` | Every sampled call |
+| `payment.processing.latency` | `Timer` | Every call |
 | `payment.processing.latency.active` | `LongTaskTimer` | When `trackActive=true` |
 | `payment.processing.error.total` | `Counter` | On any exception |
 
@@ -269,7 +267,6 @@ public PaymentResult processPayment(String channel, String partnerTier,
 | `addSpanTags` | `boolean` | `true` | Enrich span with `spanTags` |
 | `recordBaggage` | `boolean` | `false` | Read OTel baggage fields as metric tags |
 | `baggageFields` | `String[]` | `{}` | Per-method baggage field override |
-| `sampleRate` | `double` | `1.0` | Fraction of calls to instrument (0.0–1.0) |
 
 ---
 
@@ -288,7 +285,6 @@ public PaymentResult processPayment(String channel, String partnerTier,
 | In-flight tracking (`LongTaskTimer`) | ❌ | ✅ |
 | Tracing span creation | ❌ | ✅ |
 | OTel baggage → metric tag | ❌ | ✅ |
-| Per-call sampling (`sampleRate`) | ❌ | ✅ |
 | Team-wide naming convention | ❌ Manual | ✅ Enforced by aspect |
 | Cardinality policy (low vs high) | ❌ | ✅ |
 
@@ -399,20 +395,7 @@ sum(rate(payment_processing_latency_bucket{le="0.8"}[5m]))
 
 ---
 
-## 13. Sampling for High-Volume Methods
-
-On very hot paths you may not want to record every invocation:
-
-```java
-@Monitored(metric = "cache.lookup", sampleRate = 0.05)  // record only 5%
-public Object getCached(String key) { ... }
-```
-
-The method itself always executes — only metric/span recording is skipped on non-sampled calls.
-
----
-
-## 14. Decision Guide
+## 13. Decision Guide
 
 ```
 Need method-level latency?
@@ -424,7 +407,7 @@ Need method-level latency?
 
 ---
 
-## 15. Summary
+## 14. Summary
 
 | Approach | Best for |
 |----------|----------|

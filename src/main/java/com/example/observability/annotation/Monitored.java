@@ -120,12 +120,4 @@ public @interface Monitored {
      */
     boolean addSpanTags() default true;
 
-    /**
-     * Sampling rate for metric recording, as a fraction between {@code 0.0} and {@code 1.0}.
-     * A value of {@code 1.0} (the default) records every invocation.
-     * A value of {@code 0.1} records approximately 10% of invocations.
-     * <p>Use for very high-volume operations to reduce metric overhead.
-     * <p>Note: sampled-out invocations still execute normally; only metric/span recording is skipped.
-     */
-    double sampleRate() default 1.0;
 }

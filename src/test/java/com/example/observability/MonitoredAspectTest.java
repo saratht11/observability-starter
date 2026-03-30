@@ -159,25 +159,6 @@ class MonitoredAspectTest {
     }
 
     @Test
-    void sampleRate_1_0_alwaysRecordsMetrics() {
-        proxy.doWorkFullSample();
-        assertThat(registry.find("payment.sampled.latency").timer()).isNotNull();
-        assertThat(registry.find("payment.sampled.latency").timer().count()).isEqualTo(1);
-    }
-
-    @Test
-    void sampleRate_0_0_neverRecordsMetrics() {
-        proxy.doWorkNoSample();
-        assertThat(registry.find("payment.unsampled.latency").timer()).isNull();
-    }
-
-    @Test
-    void sampleRate_0_0_methodStillExecutes() {
-        // Even when sampled out, the method itself must execute normally
-        assertThat(proxy.doWorkNoSampleWithReturn()).isEqualTo("executed");
-    }
-
-    @Test
     void spelExpression_cachedAcrossMultipleInvocations() {
         // Repeated invocations should reuse cached SpEL expressions (no exception expected)
         for (int i = 0; i < 5; i++) {
@@ -248,33 +229,6 @@ class MonitoredAspectTest {
         )
         public void doWorkWithSpanNoTags() {
             // exercises addSpanTags=false path
-        }
-
-        @Monitored(
-                metric = "payment.sampled",
-                component = "payments",
-                sampleRate = 1.0
-        )
-        public void doWorkFullSample() {
-            // sampleRate=1.0 — always recorded
-        }
-
-        @Monitored(
-                metric = "payment.unsampled",
-                component = "payments",
-                sampleRate = 0.0
-        )
-        public void doWorkNoSample() {
-            // sampleRate=0.0 — never recorded
-        }
-
-        @Monitored(
-                metric = "payment.unsampled.return",
-                component = "payments",
-                sampleRate = 0.0
-        )
-        public String doWorkNoSampleWithReturn() {
-            return "executed"; // method still runs even when sampled out
         }
     }
 
