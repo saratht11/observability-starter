@@ -21,7 +21,6 @@ import org.springframework.stereotype.Component;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -89,12 +88,10 @@ public class MonitoredAspect {
 
         boolean recordOnlyErrors = monitored.recordOnlyErrors();
         boolean usePercentiles = monitored.percentiles() || globalPercentiles;
-        double sampleRate = monitored.sampleRate();
-        boolean sampled = sampleRate >= 1.0 || (sampleRate > 0.0 && ThreadLocalRandom.current().nextDouble() < sampleRate);
 
         // Build long task timer for active invocations tracking
         LongTaskTimer.Sample activeSample = null;
-        if (sampled && monitored.trackActive()) {
+        if (monitored.trackActive()) {
             LongTaskTimer ltt = latencyRecorder.buildLongTaskTimer(metricName, metricTags);
             activeSample = ltt.start();
         }
@@ -102,7 +99,7 @@ public class MonitoredAspect {
         // Optionally start a child span (only when an active parent trace exists)
         Span span = null;
         Tracer.SpanInScope spanInScope = null;
-        if (sampled && monitored.createSpan() && tracer.currentSpan() != null) {
+        if (monitored.createSpan() && tracer.currentSpan() != null) {
             String spanName = monitored.spanName().isBlank() ? metricName : monitored.spanName();
             span = tracer.nextSpan().name(spanName).start();
             spanInScope = tracer.withSpan(span);  // activates span on this thread
@@ -116,7 +113,7 @@ public class MonitoredAspect {
             Object result = pjp.proceed();
             long elapsedNanos = System.nanoTime() - startNanos;
 
-            if (!recordOnlyErrors && sampled) {
+            if (!recordOnlyErrors) {
                 long elapsedMs = TimeUnit.NANOSECONDS.toMillis(elapsedNanos);
                 boolean sloBreach = monitored.sloMs() > 0 && elapsedMs > monitored.sloMs();
 
@@ -137,14 +134,12 @@ public class MonitoredAspect {
         } catch (Throwable ex) {
             long elapsedNanos = System.nanoTime() - startNanos;
 
-            if (sampled) {
-                List<Tag> errorTags = new ArrayList<>(metricTags);
-                errorTags.add(Tag.of("outcome", "error"));
+            List<Tag> errorTags = new ArrayList<>(metricTags);
+            errorTags.add(Tag.of("outcome", "error"));
 
-                Timer errorTimer = latencyRecorder.buildTimer(
-                        metricName, errorTags, monitored.sloMs(), usePercentiles);
-                latencyRecorder.recordError(metricName, errorTags, errorTimer, elapsedNanos);
-            }
+            Timer errorTimer = latencyRecorder.buildTimer(
+                    metricName, errorTags, monitored.sloMs(), usePercentiles);
+            latencyRecorder.recordError(metricName, errorTags, errorTimer, elapsedNanos);
 
             if (span != null) {
                 span.tag("outcome", "error");
